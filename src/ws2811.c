@@ -46,7 +46,7 @@ MODULE_VERSION("2.0");
 #define REG_WRITE(addr, value) iowrite32(value, gpio_regs + addr)
 #define REG_READ(addr) ioread32(gpio_regs + addr)
 
-static u8 pins[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static u8 pins[32] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 static int pin_count = 0;
 static u16 led_count = 50;
 static u8* leds_data = NULL;
