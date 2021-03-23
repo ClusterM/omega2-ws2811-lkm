@@ -12,40 +12,55 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Alexey 'Cluster' Avdyukhin");
-MODULE_DESCRIPTION("WS2811 leds driver");
-MODULE_VERSION("1.0");
+MODULE_DESCRIPTION("WS2811 leds driver for Omega2");
+MODULE_VERSION("2.0");
 
 
-// for delay
-#define T0H_TIME 50
-#define T0L_TIME 1950
-#define T1H_TIME 1500
-#define T1L_TIME 500
-
-/*
-#define T0H_TIME 250-150
-#define T0L_TIME 1000
-#define T1H_TIME 600-150
-#define T1L_TIME 650
-*/
+// WS2811 timings
+#define T0H_TIME 200
+#define T1H_TIME 1200
+#define CYCLE_TIME 2000
+#define RES_TIME 50000
 
 #define CLASS_NAME  "ws2811"
+#define DEVICE_NAME "ws2811"
 
-static u8 pin = 0;
-static u16 leds = 50;
+#define GPIO_BASE     0x10000600
+#define GPIO_SIZE     0x00000050
+#define GPIO_CTRL_0   0x00000000
+#define GPIO_CTRL_0   0x00000000
+#define GPIO_CTRL_1   0x00000004
+#define GPIO_CTRL_2   0x00000008
+#define GPIO_POL_0    0x00000010
+#define GPIO_POL_1    0x00000014
+#define GPIO_POL_2    0x00000018
+#define GPIO_DATA_0   0x00000020
+#define GPIO_DATA_1   0x00000024
+#define GPIO_DATA_2   0x00000028
+#define GPIO_DSET_0   0x00000030
+#define GPIO_DSET_1   0x00000034
+#define GPIO_DSET_2   0x00000038
+#define GPIO_DCLR_0   0x00000040
+#define GPIO_DCLR_1   0x00000044
+#define GPIO_DCLR_2   0x00000048
+#define REG_WRITE(addr, value) iowrite32(value, gpio_regs + addr)
+#define REG_READ(addr) ioread32(gpio_regs + addr)
+
+static u8 pins[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static int pin_count = 0;
+static u16 led_count = 50;
 static u8* leds_data = NULL;
-static char* device_name = "leds";
-module_param(pin, byte, 0);
-MODULE_PARM_DESC(pin,"pin number");
-module_param(leds, short, 0);
-MODULE_PARM_DESC(leds,"number of leds (default 50)");
-module_param(device_name, charp, 0);
-MODULE_PARM_DESC(device_name,"name of pseudofile (default \"leds\")");
+module_param_array(pins, byte, &pin_count, 0);
+MODULE_PARM_DESC(pins,"pin number(s)");
+module_param(led_count, short, 0);
+MODULE_PARM_DESC(led_count,"number of leds per pin (default 50)");
 static int majorNumber = -1;
 static struct class*  ws2811Class  = NULL;
 static struct device* ws2811Device = NULL;
-static struct gpio_desc* pin_desc = NULL;
+void* gpio_regs = NULL;
+u32 mask_0, mask_1;
 DEFINE_SPINLOCK(lock);
+static u64 last_transfer_time_ns = 0;
 
 // The prototype functions for the character driver -- must come before the struct definition
 static int     dev_open(struct inode *, struct file *);
@@ -65,62 +80,54 @@ static struct file_operations fops =
  
 static void sync_leds(void)
 {
-    u8 bit, i;
+    u8 bit, pin;
     u16 byte;
     unsigned long flags;
-    //u64 t;
+    u32 zero_0, zero_1;
+    u64 now;
+    
+    // Clear all pins
+    REG_WRITE(GPIO_DCLR_0, mask_0);
+    REG_WRITE(GPIO_DCLR_1, mask_1);
+    // Reset time if need
+    now = ktime_to_ns(ktime_get_boottime());
+    if (now - last_transfer_time_ns < RES_TIME)
+        ndelay(RES_TIME - (now - last_transfer_time_ns));
+    ndelay(CYCLE_TIME); // for align
     spin_lock_irqsave(&lock, flags);
-    gpiod_set_value(pin_desc, 0);
-    for (byte = 0; byte < 3 * leds; byte++)
+    for (byte = 0; byte < 3 * led_count; byte++)
     {
         for (bit = 0; bit < 8; bit++)
         {            
-            for (i = 0; i < 50; i++)
-                ndelay(10); // align timer
-            if (leds_data[byte] & (1<<(7-bit)))
+            // Prepare values
+            zero_0 = 0;
+            zero_1 = 0;
+            for (pin = 0; pin < pin_count; pin++)
             {
-                gpiod_set_value(pin_desc, 1);
-                ndelay(T1H_TIME);
-                gpiod_set_value(pin_desc, 0);
-                ndelay(T1L_TIME);
-            } else {
-                gpiod_set_value(pin_desc, 1);
-                ndelay(T0H_TIME);
-                gpiod_set_value(pin_desc, 0);
-                ndelay(T0L_TIME);
+                if (!(leds_data[byte + pin * led_count * 3] & (1<<(7-bit))))
+                {
+                    if (pins[pin] < 32)
+                        zero_0 |= 1 << pins[pin];
+                    else if (pins[pin] < 64)
+                        zero_1 |= 1 << (pins[pin] - 32);
+                }
             }
-            
-
-            //for (i = 0; i < 50; i++)
-            //ndelay(10); // align timer
-            /*
-            t = ktime_get_ns();
-            t += 500;
-            while (ktime_get_ns() < t) ;
-            if (leds_data[byte] & (1<<(7-bit)))
-            {
-                t = ktime_get_ns();
-                gpiod_set_value(pin_desc, 1);
-                t += (T1H_TIME);
-                while (ktime_get_ns() < t) ;
-                t = ktime_get_ns();
-                gpiod_set_value(pin_desc, 0);
-                t += ((T1L_TIME) - 500);
-                while (ktime_get_ns() < t) ;
-            } else {
-                t = ktime_get_ns();
-                gpiod_set_value(pin_desc, 1);
-                t += (T0H_TIME);
-                while (ktime_get_ns() < t) ;
-                t = ktime_get_ns();
-                gpiod_set_value(pin_desc, 0);
-                t += ((T0L_TIME) - 500);
-                while (ktime_get_ns() < t) ;
-            }
-            */
+            // Set all
+            REG_WRITE(GPIO_DSET_0, mask_0);
+            REG_WRITE(GPIO_DSET_1, mask_1);
+            ndelay(T0H_TIME); // 50
+            // Clear for zero bits
+            REG_WRITE(GPIO_DCLR_0, zero_0);
+            REG_WRITE(GPIO_DCLR_1, zero_1);
+            ndelay(T1H_TIME - T0H_TIME);
+            // Clear all
+            REG_WRITE(GPIO_DCLR_0, mask_0);
+            REG_WRITE(GPIO_DCLR_1, mask_1);
+            ndelay(CYCLE_TIME - T1H_TIME);
         }
     }
     spin_unlock_irqrestore(&lock, flags);
+    last_transfer_time_ns = ktime_to_ns(ktime_get_boottime());
 }
 
 static void ws2811_free(void)
@@ -132,43 +139,54 @@ static void ws2811_free(void)
         class_destroy(ws2811Class);                             // remove the device class
     }
     if (majorNumber >= 0)
-        unregister_chrdev(majorNumber, device_name);            // unregister the major number
-    if (!IS_ERR_OR_NULL(pin_desc))
-        gpiod_put(pin_desc);
-    kfree(leds_data);
+        unregister_chrdev(majorNumber, DEVICE_NAME);            // unregister the major number
+    if (gpio_regs != NULL)
+        iounmap(gpio_regs);                                     // unmap registers
+    kfree(leds_data);                                           // free allocated memory
 }
 
 static __init int ws2811_init(void)
 {
-    int r;
-    pin_desc = gpio_to_desc(pin);
-    if (IS_ERR(pin_desc))
+    int pin;
+    // Map Omega2's registers
+    gpio_regs = ioremap_nocache(GPIO_BASE, GPIO_SIZE);
+    if (gpio_regs == NULL)
     {
-        printk(KERN_ERR "WS2811: gpiod_request result: %ld\n", PTR_ERR(pin_desc));
+        printk(KERN_ERR "WS2811: failed to map physical memory\n");
         ws2811_free();
         return -1;
     }
-    r = gpiod_direction_output(pin_desc, 0);
-    if (r)
+    // Calculate mask for pins
+    mask_0 = 0;
+    mask_1 = 0;
+    for (pin = 0; pin < pin_count; pin++)
     {
-        printk(KERN_ERR "WS2811: gpiod_request result: %d\n", r);
-        ws2811_free();
-        return -1;
+        if (pins[pin] < 32) 
+            mask_0 |= 1 << pins[pin];
+        else if (pins[pin] < 64) 
+            mask_1 |= 1 << (pins[pin] - 32);
     }
-    leds_data = kzalloc(3 * leds, GFP_KERNEL);
+    REG_WRITE(GPIO_CTRL_0, REG_READ(GPIO_CTRL_0) | mask_0); // output
+    REG_WRITE(GPIO_CTRL_1, REG_READ(GPIO_CTRL_1) | mask_1); // output
+
+    // Allocate memory
+    leds_data = kzalloc(3 * led_count * pin_count, GFP_KERNEL);
     if (!leds_data)
     {
         printk(KERN_ERR "WS2811: can't allocate memory for leds data\n");
         ws2811_free();
         return -1;
     }
-    majorNumber = register_chrdev(0, device_name, &fops);
+
+    // Register character device and request major number
+    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
     if (majorNumber<0)
     {
         printk(KERN_ERR "WS2811: failed to register a major number\n");
         ws2811_free();
         return -1;
     }
+
     // Register the device class
     ws2811Class = class_create(THIS_MODULE, CLASS_NAME);
     if (IS_ERR(ws2811Class))
@@ -177,14 +195,16 @@ static __init int ws2811_init(void)
         printk(KERN_ERR "WS2811: failed to register device class\n");
         return -1;
     }
+
     // Register the device driver
-    ws2811Device = device_create(ws2811Class, NULL, MKDEV(majorNumber, 0), NULL, device_name);
+    ws2811Device = device_create(ws2811Class, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
     if (IS_ERR(ws2811Device))
     {
         ws2811_free();
         printk(KERN_ERR "WS2811: failed to create the device\n");
         return -1;
     }
+
     sync_leds();
     printk(KERN_INFO "WS2811: driver started\n");
     return 0;
@@ -203,7 +223,7 @@ static int dev_open(struct inode *inodep, struct file *filep)
  
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
 {
-    loff_t max_pos = 3 * leds;
+    loff_t max_pos = 3 * led_count * pin_count;
     ssize_t r = 0;
     while ((*offset < max_pos) && (r < len))
     {
@@ -218,7 +238,7 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
-    loff_t max_pos = 3 * leds;
+    loff_t max_pos = 3 * led_count * pin_count;
     ssize_t r = 0;
     while (r < len)
     {
@@ -241,7 +261,7 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
 
 static loff_t dev_llseek(struct file *file, loff_t offset, int orig)
 {
-    loff_t max_pos = 3 * leds;
+    loff_t max_pos = 3 * led_count * pin_count;
     loff_t new_pos = 0;
     switch (orig)
     {

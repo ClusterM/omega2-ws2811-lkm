@@ -4,9 +4,9 @@ include $(INCLUDE_DIR)/kernel.mk
 # name
 PKG_NAME:=ws2811
 # version of what we are downloading
-PKG_VERSION:=1.0
+PKG_VERSION:=2.0
 # version of this makefile
-PKG_RELEASE:=0
+PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_NAME)
 #PKG_BUILD_DIR:=$(TOPDIR)/$(PKG_NAME)
@@ -33,7 +33,6 @@ define Build/Compile
 	    $(MAKE_OPTS) \
 	    modules
 	cp -f $(PKG_BUILD_DIR)/$(PKG_NAME).ko ./
-	#scp $(PKG_BUILD_DIR)/$(PKG_NAME).ko root@10.13.0.245:/root/
 endef
 
 $(eval $(call KernelPackage,$(PKG_NAME)))
