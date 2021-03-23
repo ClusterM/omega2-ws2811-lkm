@@ -14,7 +14,7 @@ For example you are using pins 11,15,16,17 and 300 LEDs per each pin, command to
 
     insmod ws2811 pins=11,15,16,17 led_count=300
 
-or create /etc/modules.d/ws2811 file and put this string there:
+or create **/etc/modules.d/ws2811** file and put this string there:
 
     ws2811 pins=11,15,16,17 led_count=300
 
